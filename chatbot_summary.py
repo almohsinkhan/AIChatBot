@@ -53,6 +53,8 @@ Rules:
 Return ONLY the updated summary.
 """
 
+
+
     response = model.invoke([
         SystemMessage(content=prompt)
     ])
