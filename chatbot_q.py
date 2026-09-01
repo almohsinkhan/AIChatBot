@@ -1,5 +1,7 @@
 from langchain_ollama import ChatOllama
 from langchain_core.messages import SystemMessage
+from langgraph.graph import StateGraph, START, END
+from typing import TypedDict, List
 import time
 
 
@@ -9,34 +11,21 @@ model = ChatOllama(
     base_url="http://localhost:11434"
 )
 
-# Only user messages are stored
-user_memory = []
 
-while True:
+class ChatState(TypedDict):
+    user_input: str
+    user_memory: List[str]
+    response: str
+    response_time: float
+    total_time: float
 
-    print("You (type END on a new line to send):")
 
-    lines = []
+def chat_node(state: ChatState):
+    start_time = time.perf_counter()
 
-    while True:
-        line = input()
+    user_memory = state["user_memory"]
+    user_input = state["user_input"]
 
-        if line.strip() == "END":
-            break
-
-        lines.append(line)
-
-    user_input = "\n".join(lines).strip()
-
-    if user_input.lower() == "quit":
-        break
-
-    if not user_input:
-        continue
-
-    start_time = time.time()
-
-    # Format previous user messages
     if user_memory:
         previous_messages = "\n".join(
             f"{i + 1}. {message}"
@@ -70,23 +59,75 @@ CURRENT USER MESSAGE:
 Now answer ONLY the current user message.
 """
 
-    response_start = time.time()
+    response_start = time.perf_counter()
 
     response = model.invoke([
         SystemMessage(content=prompt)
     ])
 
-    response_end = time.time()
+    response_end = time.perf_counter()
 
-    # Store ONLY current user message
-    user_memory.append(user_input)
+    user_memory = user_memory + [user_input]
 
-    print(f"\nAI: {response.content}\n")
-
-    total_time = time.time() - start_time
+    total_time = time.perf_counter() - start_time
     response_time = response_end - response_start
 
+    return {
+        "user_memory": user_memory,
+        "response": response.content,
+        "response_time": response_time,
+        "total_time": total_time
+    }
+
+
+graph_builder = StateGraph(ChatState)
+
+graph_builder.add_node("chat", chat_node)
+
+graph_builder.add_edge(START, "chat")
+graph_builder.add_edge("chat", END)
+
+graph = graph_builder.compile()
+
+
+user_memory = []
+
+
+while True:
+
+    print("You (type END on a new line to send):")
+
+    lines = []
+
+    while True:
+        line = input()
+
+        if line.strip() == "END":
+            break
+
+        lines.append(line)
+
+    user_input = "\n".join(lines).strip()
+
+    if user_input.lower() == "quit":
+        break
+
+    if not user_input:
+        continue
+
+    result = graph.invoke({
+        "user_input": user_input,
+        "user_memory": user_memory,
+        "response": "",
+        "response_time": 0.0,
+        "total_time": 0.0
+    })
+
+    user_memory = result["user_memory"]
+
+    print(f"\nAI: {result['response']}\n")
+
     print(f"Stored user messages: {len(user_memory)}")
-    print(f"Total processing time: {total_time:.4f} seconds")
-    print(f"Response generation time: {response_time:.4f} seconds")
+    print(f"Total processing time: {result['total_time']:.4f} seconds")
+    print(f"Response generation time: {result['response_time']:.4f} seconds")
     print()
