@@ -109,17 +109,6 @@ This project is not only about making a chatbot that answers questions. It is al
 
 The goal is to combine practical offline AI use with better human-like conversation patterns while keeping the system responsive and lightweight.
 
-## Getting started
-
-At the moment, this project is in active experimentation and feature development. The next steps are to:
-
-- define the local runtime and model setup
-- create the chat backend
-- add context memory for recent conversations
-- implement voice input and output
-- build a simple user interface
-- test mobile and local-device access paths
-
 ## Summary
 
 This project aims to create a local AI chatbot similar to ChatGPT, but designed for offline use, low connectivity, and local privacy. It focuses on reading support, technical understanding, and conversation quality, with future support for voice and mobile access.
