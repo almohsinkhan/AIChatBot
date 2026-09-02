@@ -12,6 +12,7 @@ model = ChatOllama(
 
 RECENT_TURNS = 4
 RECENT_MESSAGES = RECENT_TURNS * 2
+MAX_SUMMARY_CHARS = 8000
 
 
 class ChatState(TypedDict):
@@ -21,6 +22,8 @@ class ChatState(TypedDict):
     response: str
     response_time: float
     total_time: float
+
+
 
 
 def update_summary(state: ChatState) -> str:
@@ -39,11 +42,13 @@ def update_summary(state: ChatState) -> str:
     summary_prompt = f"""
 Update the conversation memory summary.
 
-An existing summary may already contain information
-from older conversation. Combine it with the newly
-older conversation.
+The final summary MUST stay below {MAX_SUMMARY_CHARS} characters.
 
-Preserve important:
+An existing summary may already contain information from older
+conversation. Combine it with the newly older conversation.
+
+Preserve the most important information:
+
 - user facts
 - preferences
 - names
@@ -54,9 +59,22 @@ Preserve important:
 - important technical details
 - important conversation context
 
-Remove unnecessary conversational details.
+Prioritize information that will be useful in future conversations.
+
+Remove:
+
+- repetition
+- greetings
+- unnecessary conversational details
+- redundant information
+- information that is no longer useful
+
+If the information cannot fit within {MAX_SUMMARY_CHARS} characters,
+keep the most important information and remove lower-priority details.
 
 Do not invent information.
+Do not change facts.
+Do not exceed {MAX_SUMMARY_CHARS} characters.
 
 EXISTING SUMMARY:
 --- BEGIN EXISTING SUMMARY ---
@@ -68,7 +86,7 @@ NEW OLDER CONVERSATION:
 {old_conversation}
 --- END NEW CONVERSATION ---
 
-Return only the updated summary.
+Return ONLY the updated summary.
 """
 
     summary_response = model.invoke([
@@ -76,7 +94,6 @@ Return only the updated summary.
     ])
 
     return summary_response.content
-
 
 def chat_node(state: ChatState) -> ChatState:
     start_time = time.time()
