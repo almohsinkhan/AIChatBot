@@ -1,4 +1,4 @@
-MODEL_NAME = "gemma3:4b"
+MODEL_NAME = "gemma4:e2b "
 BASE_URL = "http://localhost:11434"
 TEMPERATURE = 0.7
 

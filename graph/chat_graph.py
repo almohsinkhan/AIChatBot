@@ -1,3 +1,4 @@
+from pyexpat.errors import messages
 import time
 from typing import TypedDict, List, Dict
 
@@ -25,7 +26,8 @@ class ChatState(TypedDict):
     total_time: float
 
 
-def chat_node(state: ChatState) -> ChatState:
+
+def chat_node(state: ChatState, runtime) -> ChatState:
 
     start_time = time.time()
 
@@ -35,19 +37,32 @@ def chat_node(state: ChatState) -> ChatState:
     })
 
     system_prompt = f"""
-You are a helpful AI assistant.
+    You are generating responses for a live voice conversation.
 
-Follow these instructions:
-- Answer the user's questions clearly and accurately.
-- Use the conversation summary and recent messages as context.
-- Do not invent facts.
-- If you are unsure, say so.
-- Maintain consistency with previous conversation.
-- Follow the user's instructions and preferences when known.
+    Your response will be converted directly into speech, so write as a natural person would speak.
 
-Conversation summary:
-{state["summary"]}
-"""
+    You will be given:
+    - A conversation summary containing older context.
+    - Recent conversation messages containing the latest context.
+
+    Use both the summary and recent messages to understand the conversation and maintain continuity.
+
+    Voice response rules:
+    - Respond naturally and conversationally.
+    - Keep responses concise and easy to listen to.
+    - Do not use markdown, bullets, stars, emojis, or other formatting.
+    - Do not write things that are meant to be visually read, such as headings or lists.
+    - Avoid unnecessary repetition.
+    - Do not sound robotic or overly formal.
+    - Use short, natural sentences.
+    - Continue naturally from the user's last message rather than restarting the conversation.
+    - If the user's speech-to-text contains spelling mistakes, transcription errors, or missing words, infer the intended meaning from the conversation context.
+    - Do not mention or point out speech-to-text errors unless clarification is actually necessary.
+    - If the user's request is unclear, ask a short clarification question instead of guessing.
+
+    Conversation summary:
+    {state["summary"]}
+    """
 
     messages = [
         SystemMessage(content=system_prompt)
@@ -65,17 +80,11 @@ Conversation summary:
                 AIMessage(content=message["content"])
             )
 
-    print("\nAssistant: ", end="", flush=True)
+    response = model.invoke(messages)
+    response_text = response.content.strip()
 
-    response_text = ""
 
-    for chunk in model.stream(messages):
 
-        if chunk.content:
-            print(chunk.content, end="", flush=True)
-            response_text += chunk.content
-
-    print()
 
     state["recent_messages"].append({
         "role": "assistant",

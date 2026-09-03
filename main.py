@@ -1,5 +1,5 @@
 from graph.chat_graph import build_graph
-from utils.input_handler import get_user_input
+from voice import listen, speak
 
 
 graph = build_graph()
@@ -11,7 +11,7 @@ total_time = 0.0
 
 while True:
 
-    user_input = get_user_input()
+    user_input = listen()
 
     if user_input.lower() == "quit":
         break
@@ -31,3 +31,7 @@ while True:
     summary = result["summary"]
     recent_messages = result["recent_messages"]
     total_time = result["total_time"]
+
+    print("\nAssistant:", result["response"])
+
+    speak(result["response"])
