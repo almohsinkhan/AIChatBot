@@ -1,156 +1,327 @@
-import subprocess
+import queue
+import threading
+
 import numpy as np
-import torch
 import sounddevice as sd
+import torch
+from scipy.signal import resample_poly
 from silero_vad import load_silero_vad
 from faster_whisper import WhisperModel
+from kokoro import KPipeline
 
-import threading
-import queue
 
-VOICE = "en_US-lessac-medium"
+# -----------------------------
+# Audio configuration
+# -----------------------------
 
-SAMPLE_RATE = 16000
+MIC_DEVICE = 12
+
+MIC_SAMPLE_RATE = 48000
+MODEL_SAMPLE_RATE = 16000
+
 FRAME_SIZE = 512
 
+VOICE = "af_sky"
+TTS_SAMPLE_RATE = 24000
+
+
+# -----------------------------
+# Load models
+# -----------------------------
+
+print("Loading Kokoro...")
+kokoro_pipeline = KPipeline(lang_code="a")
+
+print("Loading Silero VAD...")
 vad = load_silero_vad()
 
+print("Loading Whisper...")
 whisper = WhisperModel(
-    "small",
+    "medium",
     device="cpu",
-    compute_type="int8"
+    compute_type="int8",
 )
+
+print("Voice models loaded.\n")
+
+
+# ============================================================
+# SPEECH TO TEXT
+# ============================================================
+
+def listen():
+    """
+    Continuously listen to the microphone.
+
+    Microphone:
+        48 kHz
+
+    Whisper/VAD:
+        16 kHz
+    """
+
+    audio_queue = queue.Queue()
+
+    speaking = False
+    silence_frames = 0
+
+    frames = []
+
+    PRE_BUFFER_FRAMES = 10
+    SILENCE_LIMIT = 25
+
+    pre_buffer = []
+
+    print("Listening...")
+
+    def callback(indata, frames_count, time_info, status):
+
+        if status:
+            print(status)
+
+        # IMPORTANT:
+        # Callback only copies audio and puts it in the queue.
+        # Do not run VAD/resampling here.
+        audio = indata[:, 0].copy()
+
+        audio_queue.put(audio)
+
+    with sd.InputStream(
+        device=MIC_DEVICE,
+        samplerate=MIC_SAMPLE_RATE,
+        channels=1,
+        dtype="float32",
+        blocksize=FRAME_SIZE * 3,
+        callback=callback,
+    ):
+
+        while True:
+
+            # Wait for the NEXT actual microphone block.
+            audio = audio_queue.get()
+
+            # Keep a rolling pre-buffer.
+            pre_buffer.append(audio)
+
+            if len(pre_buffer) > PRE_BUFFER_FRAMES:
+                pre_buffer.pop(0)
+
+            # Resample only outside the callback.
+            resampled = resample_poly(
+                audio,
+                MODEL_SAMPLE_RATE,
+                MIC_SAMPLE_RATE,
+            ).astype(np.float32)
+
+            audio_tensor = torch.from_numpy(resampled)
+
+            probability = vad(
+                audio_tensor,
+                MODEL_SAMPLE_RATE,
+            ).item()
+
+            if probability > 0.5:
+
+                if not speaking:
+
+                    print("Speech detected...")
+
+                    speaking = True
+                    silence_frames = 0
+
+                    # Include audio immediately before speech.
+                    frames.extend(pre_buffer)
+
+                else:
+
+                    silence_frames = 0
+
+                frames.append(audio)
+
+            elif speaking:
+
+                # Continue recording during silence.
+                frames.append(audio)
+
+                silence_frames += 1
+
+                if silence_frames >= SILENCE_LIMIT:
+
+                    print("Speech ended.")
+
+                    break
+
+    if not frames:
+        return ""
+
+    # Combine microphone audio.
+    audio_48k = np.concatenate(frames)
+
+    # Convert 48 kHz -> 16 kHz.
+    audio_16k = resample_poly(
+        audio_48k,
+        MODEL_SAMPLE_RATE,
+        MIC_SAMPLE_RATE,
+    ).astype(np.float32)
+
+    print("Transcribing...")
+
+    segments, info = whisper.transcribe(
+        audio_16k,
+        language="en",
+        beam_size=5,
+        temperature=0,
+        vad_filter=False,
+        condition_on_previous_text=False,
+    )
+
+    text = " ".join(
+        segment.text.strip()
+        for segment in segments
+    )
+
+    text = text.strip()
+
+    print(f"You: {text}")
+
+    return text
+
+# ============================================================
+# TEXT TO SPEECH
+# ============================================================
 
 tts_queue = queue.Queue()
 
-def tts_worker():
-    while True:
+tts_thread = None
+tts_running = False
 
-        sentence = tts_queue.get()
 
-        if sentence is None:
-            break
+def speak(text):
+    """
+    Generate and play one piece of text.
+    """
 
-        speak(sentence)
+    if not text:
+        return
 
-        tts_queue.task_done()
+    generator = kokoro_pipeline(
+        text,
+        voice=VOICE,
+        speed=1.05,
+    )
 
-threading.Thread(target=tts_worker, daemon=True).start()
+    for _, _, audio in generator:
 
-def stop_tts():
-    tts_queue.put(None)
-    tts_queue.join()
+        audio = np.asarray(
+            audio,
+            dtype=np.float32,
+        )
 
-def listen():
-
-    frames = []
-    speaking = False
-    silence_count = 0
-
-    while True:
-
-        audio = sd.rec(
-            FRAME_SIZE,
-            samplerate=SAMPLE_RATE,
-            channels=1,
-            dtype="float32"
+        sd.play(
+            audio,
+            TTS_SAMPLE_RATE,
         )
 
         sd.wait()
 
-        audio_tensor = torch.from_numpy(audio[:, 0])
 
-        probability = vad(audio_tensor, SAMPLE_RATE)
+def _tts_worker():
 
-        if probability > 0.5:
+    while True:
 
-            speaking = True
-            silence_count = 0
-            frames.append(audio)
+        text = tts_queue.get()
 
-        elif speaking:
+        if text is None:
+            tts_queue.task_done()
+            break
 
-            frames.append(audio)
-            silence_count += 1
+        try:
+            speak(text)
 
-            if silence_count > 20:
+        except Exception as e:
+            print(f"\nTTS error: {e}")
 
-                audio_data = torch.cat([
-                    torch.from_numpy(frame[:, 0])
-                    for frame in frames
-                ])
+        finally:
+            tts_queue.task_done()
 
-                segments, info = whisper.transcribe(
-                    audio_data.numpy(),
-                    language="en"
-                )
 
-                text = " ".join(
-                    segment.text.strip()
-                    for segment in segments
-                )
+def start_tts():
 
-                return text.strip()
+    global tts_thread
+    global tts_running
 
-def speak(text):
+    if tts_running:
+        return
 
-    process = subprocess.run(
-        [
-            "python",
-            "-m",
-            "piper",
-            "-m",
-            VOICE,
-            "--output_raw"
-        ],
-        input=text.encode(),
-        stdout=subprocess.PIPE
+    tts_running = True
+
+    tts_thread = threading.Thread(
+        target=_tts_worker,
+        daemon=True,
     )
 
-    audio = np.frombuffer(
-        process.stdout,
-        dtype=np.int16
-    )
+    tts_thread.start()
 
-    sd.play(
-        audio,
-        samplerate=22050
-    )
 
-    sd.wait()
+def wait_for_tts():
 
-MIN_SENTENCE_LENGTH = 5
-def speak_stream(chunks):
-    sentence =""
+    """
+    Wait until everything currently in the TTS queue
+    has finished speaking.
+    """
 
-    for chunk in chunks:
-        sentence  += chunk
+    tts_queue.join()
 
-        print(chunk, end="", flush=True)
 
-        sentence += chunk
+def stop_tts():
 
-        if (sentence.rstrip().endswith((".", "!", "?"))) and (len(sentence.split()) > MIN_SENTENCE_LENGTH):
-            tts_queue.put(sentence.strip())
-            sentence = ""
+    global tts_running
 
-    if sentence.strip():
-        tts_queue.put(sentence.strip())
+    if not tts_running:
+        return
+
+    tts_queue.put(None)
+
+    tts_queue.join()
+
+    tts_running = False
+
+
+# ============================================================
+# STREAMING TTS
+# ============================================================
 
 class StreamingTTS:
 
     def __init__(self):
+
         self.sentence = ""
 
     def add_chunk(self, chunk):
+
+        if not chunk:
+            return
+
         self.sentence += chunk
 
-        if self.sentence.rstrip().endswith((".", "!", "?")):
-            tts_queue.put(self.sentence.strip())
+        # Wait until a natural sentence boundary.
+        if self.sentence.rstrip().endswith(
+            (".", "!", "?")
+        ):
+
+            text = self.sentence.strip()
+
+            if text:
+                tts_queue.put(text)
+
             self.sentence = ""
 
     def finish(self):
+
         if self.sentence.strip():
-            tts_queue.put(self.sentence.strip())
+
+            tts_queue.put(
+                self.sentence.strip()
+            )
 
         self.sentence = ""

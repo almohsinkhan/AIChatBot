@@ -1,37 +1,77 @@
-from graph.chat_graph import build_graph
-from voice import listen, speak
+from chat import chat_stream, update_memory
+from voice import (
+    listen,
+    StreamingTTS,
+    start_tts,
+    wait_for_tts,
+    stop_tts,
+)
 
-
-graph = build_graph()
 
 summary = ""
 recent_messages = []
-total_time = 0.0
 
 
-while True:
+start_tts()
 
-    user_input = listen()
+try:
 
-    if user_input.lower() == "quit":
-        break
+    while True:
 
-    if not user_input:
-        continue
+        # -----------------------------
+        # Listen to user
+        # -----------------------------
 
-    result = graph.invoke({
-        "user_input": user_input,
-        "summary": summary,
-        "recent_messages": recent_messages,
-        "response": "",
-        "response_time": 0.0,
-        "total_time": total_time
-    })
+        user_input = listen()
 
-    summary = result["summary"]
-    recent_messages = result["recent_messages"]
-    total_time = result["total_time"]
+        if not user_input:
+            continue
 
-    print("\nAssistant:", result["response"])
+        if user_input.lower().strip() == "quit":
+            break
 
-    speak(result["response"])
+        # -----------------------------
+        # Stream LLM + TTS
+        # -----------------------------
+
+        print("\nAssistant: ", end="", flush=True)
+
+        tts = StreamingTTS()
+
+        response = ""
+
+        for chunk in chat_stream(
+            user_input,
+            summary,
+            recent_messages,
+        ):
+
+            print(chunk, end="", flush=True)
+
+            response += chunk
+
+            # Send each LLM chunk to TTS
+            tts.add_chunk(chunk)
+
+        print()
+
+        # Speak any remaining text
+        tts.finish()
+
+        # Wait until the assistant finishes speaking
+        wait_for_tts()
+
+        # -----------------------------
+        # Update conversation memory
+        # -----------------------------
+
+        summary, recent_messages = update_memory(
+            user_input,
+            response,
+            summary,
+            recent_messages,
+        )
+
+finally:
+
+    stop_tts()

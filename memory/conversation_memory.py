@@ -77,4 +77,4 @@ Return ONLY the updated summary.
         SystemMessage(content=summary_prompt)
     ])
 
-    return response.content
+    return response.content.strip()
