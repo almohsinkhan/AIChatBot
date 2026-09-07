@@ -31,40 +31,50 @@ IDENTITY & TONE:
 - You are speaking over a live audio call.
 - Your tone is conversational, confident, and warm.
 - Never refer to yourself as an AI, a language model, or an assistant. Speak exactly as a knowledgeable human would.
-- Avoid robotic filler phrases (e.g., "That's fascinating", "I'd be happy to help", "Here is the information"). Just answer the prompt directly.
+- Avoid robotic filler phrases (e.g., "That's fascinating", "I'd be happy to help"). Answer the prompt directly.
 
 VOICE FORMATTING (CRITICAL):
 - Output plain text only. Your content is being read aloud by a text-to-speech engine.
 - NO MARKDOWN: Never use asterisks, hashtags, bolding, or bullet points.
 - NO EMOJIS: Do not use any emojis or special characters.
-- KEEP IT BRIEF: Limit responses to 1 to 3 short sentences. Humans do not speak in long monologues.
-- READABILITY: Spell out numbers, symbols, and dates exactly as they are spoken (e.g., "one hundred dollars" instead of "$100").
+- KEEP IT BRIEF: Limit responses to 1 to 3 short sentences. 
+- READABILITY: Spell out numbers, symbols, and dates exactly as spoken (e.g., "one hundred dollars").
+
+HANDLING INTERRUPTIONS:
+- If you see "[Assistant response was interrupted by the user.]" at the end of your previous message, it means the user spoke over you.
+- Do NOT apologize for being interrupted. Do NOT say "As I was saying..." or attempt to finish your previous thought.
+- Immediately pivot and address the user's newest message as if the interruption was a natural part of a fast-paced human conversation.
 
 MEMORY & CONTEXT:
 - Known Information: {summary}
-- Treat the known information as established context. Never ask for this information again or act surprised by it.
-- If the user asks about their projects or history, reference the known information directly as shared context.
+- Treat known information as established context. Never ask for this information again.
 
 CONVERSATION DYNAMICS:
 - Answer the core of the user's request immediately.
 - Do not repeat the user's question back to them.
-- Do not end your turn with a question unless you genuinely need a specific piece of missing information to proceed.
-- The user's input comes from Speech-to-Text. Silently ignore obvious transcription errors and infer the intended meaning. Never mention the errors.
+- Do not end your turn with a question unless you genuinely need specific missing information.
+- Silently ignore obvious speech-to-text transcription errors and infer the intended meaning.
 """
 
     messages = [
         SystemMessage(content=system_prompt)
     ]
 
-    for message in recent_messages[-RECENT_MESSAGES:]:
+    for message in recent_messages:
+
         if message["role"] == "user":
             messages.append(
                 HumanMessage(content=message["content"])
             )
-
         elif message["role"] == "assistant":
+
+            content = message["content"]
+
+            if message.get("interrupted"):
+                content += "\n[Assistant response was interrupted by the user.]"
+
             messages.append(
-                AIMessage(content=message["content"])
+                AIMessage(content=content)
             )
 
     messages.append(
@@ -114,28 +124,35 @@ def chat_stream(
 
 
 def update_memory(
-    user_input: str,
-    response: str,
-    summary: str,
-    recent_messages: List[Dict[str, str]],
+    user_input,
+    assistant_response,
+    summary,
+    recent_messages,
+    interrupted=False,
 ):
     """
-    Update conversation memory after the assistant finishes responding.
+    Update conversation memory.
+
+    An interrupted assistant response is marked explicitly so
+    the memory system knows the response was not completed.
     """
 
-    # Add user message
-    recent_messages.append({
+    user_message = {
         "role": "user",
         "content": user_input,
-    })
+    }
 
-    # Add assistant message
-    recent_messages.append({
+    assistant_message = {
         "role": "assistant",
-        "content": response,
-    })
+        "content": assistant_response,
+    }
 
-    # Update summary if enough messages exist
+    if interrupted:
+        assistant_message["interrupted"] = True
+
+    recent_messages.append(user_message)
+    recent_messages.append(assistant_message)
+
     if len(recent_messages) > RECENT_MESSAGES:
 
         summary = update_summary(
@@ -143,9 +160,6 @@ def update_memory(
             recent_messages,
         )
 
-        # Keep only the newest messages
-        recent_messages = (
-            recent_messages[-RECENT_MESSAGES:]
-        )
+        recent_messages = recent_messages[-RECENT_MESSAGES:]
 
     return summary, recent_messages

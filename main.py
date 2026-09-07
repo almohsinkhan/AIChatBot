@@ -1,5 +1,4 @@
 import threading
-import time
 import queue
 
 import numpy as np
@@ -31,13 +30,6 @@ def monitor_for_interruption(
     user_interrupted,
     interruption_frames,
 ):
-    """
-    Monitor the microphone while the assistant is speaking.
-
-    When speech is detected, stop TTS and preserve
-    the beginning of the user's interruption.
-    """
-
     START_THRESHOLD = 0.55
     START_CONFIRM_FRAMES = 3
     PRE_BUFFER_FRAMES = 10
@@ -46,7 +38,6 @@ def monitor_for_interruption(
     pre_buffer = []
 
     while not stop_monitor.is_set():
-
         audio = get_microphone_audio(timeout=0.1)
 
         if audio is None:
@@ -74,7 +65,6 @@ def monitor_for_interruption(
             speech_confirmations = 0
 
         if speech_confirmations >= START_CONFIRM_FRAMES:
-
             print(
                 f"\n>>> User interrupted "
                 f"(VAD={probability:.2f})"
@@ -83,18 +73,12 @@ def monitor_for_interruption(
             interruption_frames.extend(pre_buffer)
 
             user_interrupted.set()
-
             interrupt_tts()
 
             return
 
 
 def capture_interruption(interruption_frames):
-    """
-    Continue recording the user's interruption
-    until they stop speaking.
-    """
-
     print("Capturing interruption...")
 
     END_THRESHOLD = 0.35
@@ -103,7 +87,6 @@ def capture_interruption(interruption_frames):
     silence_frames = 0
 
     while True:
-
         audio = get_microphone_audio(timeout=1.0)
 
         if audio is None:
@@ -128,9 +111,7 @@ def capture_interruption(interruption_frames):
             silence_frames += 1
 
         if silence_frames >= SILENCE_LIMIT:
-
             print("Interruption ended.")
-
             break
 
 
@@ -139,20 +120,6 @@ def stream_response_with_barge_in(
     summary,
     recent_messages,
 ):
-    """
-    Generate an LLM response while simultaneously
-    speaking it with TTS.
-
-    If the user speaks during the response,
-    stop TTS and capture their interruption.
-
-    Returns:
-
-        full_response
-        interrupted_text
-    """
-
-    # Clear stale microphone frames.
     while True:
         try:
             mic_queue.get_nowait()
@@ -163,7 +130,6 @@ def stream_response_with_barge_in(
 
     user_interrupted = threading.Event()
     stop_monitor = threading.Event()
-
     interruption_frames = []
 
     monitor_thread = threading.Thread(
@@ -179,47 +145,34 @@ def stream_response_with_barge_in(
     monitor_thread.start()
 
     tts = StreamingTTS()
-
     full_response = ""
 
     print("Assistant: ", end="", flush=True)
 
     try:
-
         for chunk in chat_stream(
             user_input,
             summary,
             recent_messages,
         ):
-
             if user_interrupted.is_set():
                 break
 
             print(chunk, end="", flush=True)
 
             full_response += chunk
-
-            # Send the generated text to TTS immediately.
             tts.add_chunk(chunk)
 
         print()
 
         if user_interrupted.is_set():
-
             print("Response interrupted.")
-
-            # IMPORTANT:
-            # Do not call tts.finish().
-            #
-            # interrupt_tts() already stopped playback
-            # and cleared queued speech.
 
             capture_interruption(
                 interruption_frames
             )
 
             if interruption_frames:
-
                 audio_48k = np.concatenate(
                     interruption_frames
                 )
@@ -227,23 +180,17 @@ def stream_response_with_barge_in(
                 interrupted_text = transcribe_audio(
                     audio_48k
                 )
-
             else:
                 interrupted_text = ""
 
             return full_response, interrupted_text
 
-        else:
+        tts.finish()
+        wait_for_tts()
 
-            # Ollama finished normally.
-            tts.finish()
-
-            wait_for_tts()
-
-            return full_response, ""
+        return full_response, ""
 
     finally:
-
         stop_monitor.set()
 
         if monitor_thread.is_alive():
@@ -251,7 +198,6 @@ def stream_response_with_barge_in(
 
 
 def main():
-
     summary = ""
     recent_messages = []
 
@@ -262,9 +208,7 @@ def main():
     print("Speak normally. Press Ctrl+C to exit.\n")
 
     try:
-
         while True:
-
             user_input = listen()
 
             if not user_input:
@@ -280,66 +224,48 @@ def main():
                 )
             )
 
-            # Normal response.
             if not interrupted_text:
-
                 summary, recent_messages = update_memory(
                     user_input,
                     response,
                     summary,
                     recent_messages,
                 )
+                continue
 
-            # User interrupted the assistant.
-            else:
+            summary, recent_messages = update_memory(
+                user_input,
+                response,
+                summary,
+                recent_messages,
+                interrupted=True,
+            )
 
-                print(
-                    f"\nUser interruption: "
-                    f"{interrupted_text}"
-                )
+            user_input = interrupted_text
 
-                summary, recent_messages = update_memory(
+            print(f"\nUser: {user_input}")
+
+            response, _ = (
+                stream_response_with_barge_in(
                     user_input,
-                    response,
                     summary,
                     recent_messages,
                 )
+            )
 
-                # The interruption becomes the next
-                # user turn.
-                user_input = interrupted_text
-
-                if not user_input:
-                    continue
-
-                print(
-                    f"\nUser: {user_input}"
-                )
-
-                response, _ = (
-                    stream_response_with_barge_in(
-                        user_input,
-                        summary,
-                        recent_messages,
-                    )
-                )
-
-                summary, recent_messages = update_memory(
-                    user_input,
-                    response,
-                    summary,
-                    recent_messages,
-                )
+            summary, recent_messages = update_memory(
+                user_input,
+                response,
+                summary,
+                recent_messages,
+            )
 
     except KeyboardInterrupt:
-
         print("\n\nStopping assistant...")
 
     finally:
-
         stop_tts()
         stop_microphone()
-
         print("Assistant stopped.")
 
 
