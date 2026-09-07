@@ -24,55 +24,84 @@ def update_summary(
     )
 
     summary_prompt = f"""
-Update the conversation memory summary.
+You are maintaining long-term memory for a personal AI voice assistant.
 
-The final summary MUST stay below {MAX_SUMMARY_CHARS} characters.
+Your job is to update the existing conversation summary using the older
+conversation provided below.
 
-An existing summary may already contain information from older
-conversation. Combine it with the newly older conversation.
+The summary is persistent memory. It will be given to the assistant in
+future conversations, so preserve information that may be useful later.
 
-Preserve the most important information:
+IMPORTANT:
+- Do not summarize merely by shortening the conversation.
+- Extract and preserve meaningful facts and context.
+- Never remove an important fact just because it was mentioned only once.
+- Do not invent, assume, or reinterpret information.
+- Do not include the assistant's questions unless they contain useful context.
+- Prefer factual information about the user and their ongoing work.
 
-- user facts
-- preferences
-- names
-- numbers
-- projects
-- decisions
-- corrections
-- important technical details
-- important conversation context
+Preserve especially:
 
-Prioritize information that will be useful in future conversations.
+1. User information
+   - name
+   - preferences
+   - goals
+   - interests
+   - recurring requirements
+
+2. Projects
+   - what the user is building
+   - technologies being used
+   - architecture
+   - important implementation decisions
+   - current progress
+
+3. Important context
+   - decisions already made
+   - problems already solved
+   - corrections
+   - constraints
+   - important numbers or technical details
+
+4. Conversation state
+   - unfinished tasks
+   - things the user is currently working toward
+   - important questions that still need an answer
 
 Remove:
 
-- repetition
 - greetings
-- unnecessary conversational details
-- redundant information
-- information that is no longer useful
+- small talk
+- repetitive statements
+- unnecessary assistant responses
+- temporary conversational filler
 
-If the information cannot fit within {MAX_SUMMARY_CHARS} characters,
-keep the most important information and remove lower-priority details.
+IMPORTANT RULES:
 
-Do not invent information.
-Do not change facts.
-Do not exceed {MAX_SUMMARY_CHARS} characters.
+- Keep the existing summary when it contains useful information.
+- Merge new information into the existing summary.
+- Do not replace useful old information with a vague shorter statement.
+- Do not write "The user is building something" when the actual project
+  is known.
+- Preserve specific technologies and project names.
+- Write concise factual notes rather than prose.
+- Never invent information.
+
+The final summary MUST be below {MAX_SUMMARY_CHARS} characters.
 
 EXISTING SUMMARY:
 --- BEGIN EXISTING SUMMARY ---
 {summary}
 --- END EXISTING SUMMARY ---
 
-NEW OLDER CONVERSATION:
---- BEGIN NEW CONVERSATION ---
+OLDER CONVERSATION:
+--- BEGIN OLDER CONVERSATION ---
 {old_conversation}
---- END NEW CONVERSATION ---
+--- END OLDER CONVERSATION ---
 
-Return ONLY the updated summary.
+Return ONLY the updated memory summary.
 """
-
+    
     response = model.invoke([
         SystemMessage(content=summary_prompt)
     ])
